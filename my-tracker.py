@@ -1,6 +1,7 @@
-from flask import Flask, request, redirect
+from flask import Flask, request, redirect, jsonify
 import requests
 import os
+import csv
 from datetime import datetime
 
 app = Flask(__name__)
@@ -29,7 +30,17 @@ def init_log():
 
 @app.route('/')
 def index():
-    return "<h1>Servidor de Rastreamento Ativo</h1><p>Use um endpoint como '/track/minha_campanha'.</p>"
+    return """
+    <h1>Servidor de Rastreamento Ativo</h1>
+    <p>Use um endpoint como '/track/minha_campanha'.</p>
+    <h2>Endpoints disponíveis:</h2>
+    <ul>
+        <li><a href="/track/teste">/track/teste</a> - Rastrear clique</li>
+        <li><a href="/logs">/logs</a> - Ver logs em JSON</li>
+        <li><a href="/logs/csv">/logs/csv</a> - Baixar logs em CSV</li>
+        <li><a href="/stats">/stats</a> - Estatísticas dos cliques</li>
+    </ul>
+    """
 
 @app.route('/track/<campaign_id>')
 def track(campaign_id):
@@ -116,6 +127,97 @@ def save_to_file(log_line):
             f.write(log_line)
     except IOError as e:
         print(f"Erro ao salvar no arquivo de log: {e}")
+
+def read_logs():
+    """Lê todos os logs do arquivo e retorna como lista de dicionários."""
+    logs = []
+    try:
+        if not os.path.exists(ARQUIVO_LOG):
+            return logs
+            
+        with open(ARQUIVO_LOG, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                logs.append(row)
+    except Exception as e:
+        print(f"Erro ao ler logs: {e}")
+    return logs
+
+@app.route('/logs')
+def view_logs():
+    """Rota para visualizar os logs em formato JSON."""
+    logs = read_logs()
+    return jsonify({
+        'status': 'success',
+        'total_clicks': len(logs),
+        'logs': logs
+    })
+
+@app.route('/logs/csv')
+def download_logs():
+    """Rota para baixar os logs em formato CSV."""
+    try:
+        if not os.path.exists(ARQUIVO_LOG):
+            return jsonify({'error': 'Arquivo de log não encontrado'}), 404
+            
+        from flask import send_file
+        return send_file(ARQUIVO_LOG, as_attachment=True, download_name='clicks_log.csv')
+    except Exception as e:
+        return jsonify({'error': f'Erro ao baixar arquivo: {str(e)}'}), 500
+
+@app.route('/stats')
+def view_stats():
+    """Rota para visualizar estatísticas dos cliques."""
+    logs = read_logs()
+    
+    if not logs:
+        return jsonify({
+            'status': 'success',
+            'message': 'Nenhum clique registrado ainda',
+            'stats': {
+                'total_clicks': 0,
+                'campaigns': {},
+                'countries': {},
+                'cities': {},
+                'ips': {}
+            }
+        })
+    
+    # Estatísticas
+    campaigns = {}
+    countries = {}
+    cities = {}
+    ips = {}
+    
+    for log in logs:
+        # Conta campanhas
+        campaign = log.get('Campanha', 'N/A')
+        campaigns[campaign] = campaigns.get(campaign, 0) + 1
+        
+        # Conta países
+        country = log.get('País', 'N/A')
+        countries[country] = countries.get(country, 0) + 1
+        
+        # Conta cidades
+        city = log.get('Cidade', 'N/A')
+        if city != 'N/A':
+            cities[city] = cities.get(city, 0) + 1
+        
+        # Conta IPs
+        ip = log.get('IP', 'N/A')
+        ips[ip] = ips.get(ip, 0) + 1
+    
+    return jsonify({
+        'status': 'success',
+        'stats': {
+            'total_clicks': len(logs),
+            'campaigns': campaigns,
+            'countries': countries,
+            'cities': cities,
+            'unique_ips': len(ips),
+            'ip_frequency': ips
+        }
+    })
 
 if __name__ == '__main__':
     # Inicializa o arquivo de log antes de rodar o servidor
